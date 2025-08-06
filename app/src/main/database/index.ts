@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { execSync } from "child_process";
+import { spawn } from "child_process";
 import Database from "better-sqlite3";
 
 let db: Database.Database | null = null;
@@ -67,23 +67,43 @@ export const runMigrations = () => {
     throw new Error(`dbmate binary not found: ${dbmatePath}`);
   }
 
-  try {
-    const command = [
-      `"${dbmatePath}"`,
-      `--url "${databaseUrl}"`,
-      `--migrations-dir "${migrationsDir}"`,
+  return new Promise<void>((resolve, reject) => {
+    // Use spawn with argument array to prevent command injection
+    const args: string[] = [
+      "--url",
+      databaseUrl as string, // We already checked it's not null at the beginning
+      "--migrations-dir",
+      migrationsDir,
       // Don't update the schema file when running migrations at app startup
-      `--schema-file "/dev/null"`,
+      "--schema-file",
+      "/dev/null",
       "up",
-    ].join(" ");
+    ];
 
-    console.log("Running migrations:", command);
-    execSync(command, { stdio: "inherit" });
-    console.log("Migrations completed successfully");
-  } catch (error) {
-    console.error("Migration failed:", error);
-    throw new Error(`Migration failed: ${error}`);
-  }
+    console.log("Running migrations:", dbmatePath, args.join(" "));
+
+    const child = spawn(dbmatePath, args, {
+      stdio: "inherit",
+      // Explicitly disable shell to prevent any command interpretation
+      shell: false,
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        console.log("Migrations completed successfully");
+        resolve();
+      } else {
+        const error = new Error(`Migration failed with exit code: ${code}`);
+        console.error("Migration failed:", error);
+        reject(error);
+      }
+    });
+
+    child.on("error", (error) => {
+      console.error("Migration failed:", error);
+      reject(new Error(`Migration failed: ${error}`));
+    });
+  });
 };
 
 export const closeDatabase = () => {
